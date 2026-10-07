@@ -308,3 +308,50 @@ def get_referral_count(user_id):
     conn.close()
     return n
 
+
+
+def apply_model(user_id, photo1, photo2):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""UPDATE users 
+        SET model_status = 'pending', 
+            model_photo1 = ?, 
+            model_photo2 = ?,
+            model_applied_at = CURRENT_TIMESTAMP
+        WHERE user_id = ?""", (photo1, photo2, user_id))
+    conn.commit()
+    conn.close()
+
+
+def approve_model(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET is_model = 1, model_status = 'approved' WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def reject_model(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE users SET is_model = 0, model_status = 'rejected', model_photo1 = NULL, model_photo2 = NULL WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_pending_models():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id, name, age, country, model_photo1, model_photo2 FROM users WHERE model_status = 'pending'")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def get_active_models():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id, name, age, country, model_photo1 FROM users WHERE is_model = 1 ORDER BY RANDOM()")
+    rows = c.fetchall()
+    conn.close()
+    return rows
