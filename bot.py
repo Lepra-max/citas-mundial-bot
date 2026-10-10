@@ -411,12 +411,35 @@ async def reportar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    total = db.count_users()
-    vips = db.count_vips()
+    import sqlite3
+    conn = sqlite3.connect("citas.db")
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users WHERE banned = 0")
+    total = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) = DATE('now')")
+    hoy = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) = DATE('now', '-1 day')")
+    ayer = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE is_model = 1")
+    modelos = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE is_vip = 1")
+    vips = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM matches")
+    matches = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM messages")
+    mensajes = c.fetchone()[0]
+    conn.close()
+    crec = f"+{hoy - ayer}" if hoy >= ayer else f"{hoy - ayer}"
     await update.message.reply_text(
-        f"📊 *Estadísticas*\n\n"
-        f"👥 Usuarios: {total}\n"
-        f"💎 VIPs: {vips}",
+        f"📊 *Panel de Admin*\n\n"
+        f"👥 *Total usuarios:* {total}\n"
+        f"🆕 *Hoy:* {hoy}\n"
+        f"📅 *Ayer:* {ayer}\n"
+        f"📈 *Crecimiento:* {crec}\n\n"
+        f"🌹 *Modelos activas:* {modelos}\n"
+        f"💎 *VIPs:* {vips}\n"
+        f"💘 *Matches:* {matches}\n"
+        f"💬 *Mensajes:* {mensajes}",
         parse_mode="Markdown"
     )
 
@@ -479,6 +502,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Usa /buscar para ver perfiles 👀")
         return
 
+    if data == "modelo_si":
+        await modelo_si(update, context)
+        return
+    if data == "modelo_no":
+        await modelo_no(update, context)
+        return
+
     if data == "vip_buy":
         await send_vip_invoice(update, context)
         return
@@ -515,6 +545,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("like_"):
+        user_check = db.get_user(user_id)
+        if user_check and user_check[13] == "approved":
+            await query.edit_message_text("❌ Las modelos no pueden dar likes.")
+            return
         target = int(data.split("_")[1])
         user = db.get_user(user_id)
         is_vip = db.check_vip_expired(user_id)
@@ -591,9 +625,54 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 # ---------- MAIN ----------
+
+async def modelo_si(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+
+    # Enviar mensaje al admin (tú)
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"🌹 *Nueva solicitud de modelo*\n\n"
+                 f"👤 {user.first_name}\n"
+                 f"🆔 `{user.id}`\n"
+                 f"📛 Usuario: @{user.username or 'sin_username'}\n\n"
+                 f"Escríbele para coordinar las fotos.",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Error avisando al admin: {e}")
+
+    await query.edit_message_text(
+        "🎉 *¡Excelente decisión!*\n\n"
+        "Hemos avisado al admin de tu interés.\n"
+        "Él se pondrá en contacto contigo muy pronto.\n\n"
+        "Mientras tanto, puedes ir preparando:\n"
+        "1️⃣ Foto con la mano en la cara 🤳\n"
+        "2️⃣ Foto con un papel que diga *CitasMundial* 📝\n\n"
+        "Si quieres adelantar, escríbele tú directamente: @manu_alejandro",
+        parse_mode="Markdown"
+    )
+
+
+async def modelo_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("❌ Sin problema. Usa /ser_modelo si cambias de opinión.")
+
+
 def main():
     db.init_db()
     print("🤖 Iniciando CitasMundialBot...")
+    # Dar VIP automático al admin
+    admin = db.get_user(ADMIN_ID)
+    if admin:
+        db.set_vip(ADMIN_ID, 3650)
+        print(f"✅ Admin ({ADMIN_ID}) configurado como VIP por 10 años")
+    else:
+        print(f"⚠️ Admin ({ADMIN_ID}) aún no tiene perfil. Regístrate primero con /registro")
 
     app = (
         Application.builder()
@@ -651,10 +730,6 @@ def main():
     app.run_polling()
 
 
-if __name__ == "__main__":
-    main()
-
-
 async def ser_modelo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = db.get_user(update.effective_user.id)
     if not user:
@@ -666,11 +741,33 @@ async def ser_modelo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user[13] == "approved":
         await update.message.reply_text("✅ Ya eres modelo activa.")
         return
+    keyboard = [
+        [InlineKeyboardButton("💎 Sí, quiero ser modelo", callback_data="modelo_si")],
+        [InlineKeyboardButton("❌ No, gracias", callback_data="modelo_no")]
+    ]
     await update.message.reply_text(
-        "🌹 *Postúlate como Modelo*\n\nEnvía /cancelar si no quieres seguir.\n\n*Paso 1/2:* Envía tu primera foto con la mano en la cara 🤳",
-        parse_mode="Markdown"
+        "🌹 *Conviértete en Modelo CitasMundial*\n\n"
+        "¿Sabías que las modelos de nuestro bot están entre las mujeres más vistas del mundo? 🔥\n\n"
+        "*Esto es lo que obtienes:*\n\n"
+        "✨ *Perfil destacado en TODAS las regiones*\n"
+        "✨ *Aparece en la sección Modelos del Mes*\n"
+        "✨ *Gana dinero real por cada hombre que vea tu perfil*\n"
+        "✨ *Gana dinero real por cada chat privado que recibas*\n"
+        "✨ *Tú decides cuándo y con quién hablar*\n"
+        "✨ *Sin obligación de dar likes ni matches*\n"
+        "✨ *Solo chateas si tú quieres, cuando tú quieras*\n\n"
+        "*Requisitos:*\n"
+        "• Ser mujer verificada (2 fotos con poses específicas)\n"
+        "• Ser mayor de edad\n"
+        "• Compromiso de 1 mes mínimo\n\n"
+        "*Ganancias:*\n"
+        "• 50% para ti de cada interacción\n"
+        "• Pagos semanales o mensuales (a convenir)\n"
+        "• Transferencia por el método que prefieras\n\n"
+        "*¿Te interesa?* Pulsa el botón 👇",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    return MODEL_PHOTO1
 
 
 async def model_photo1(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -707,3 +804,7 @@ async def modelos_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE)
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+
+if __name__ == "__main__":
+    main()

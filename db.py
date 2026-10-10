@@ -136,12 +136,10 @@ def get_random_profile(exclude_id, looking_for, country, is_vip):
                FROM users
                WHERE user_id != ? AND name IS NOT NULL AND banned = 0
                AND gender = ?
-               AND user_id NOT IN (SELECT to_id FROM likes WHERE from_id = ?)"""
+               AND user_id NOT IN (SELECT to_id FROM likes WHERE from_id = ?)
+               AND is_model = 0"""
     params = [exclude_id, looking_for, exclude_id]
 
-    if not is_vip:
-        query += " AND LOWER(country) = LOWER(?)"
-        params.append(country)
 
     query += " ORDER BY RANDOM() LIMIT 1"
     c.execute(query, params)
@@ -227,7 +225,7 @@ def set_vip(user_id, days=30):
     until = (datetime.now() + timedelta(days=days)).isoformat()
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("UPDATE users SET is_vip = 1, vip_until = ?, likes_left = 999999 WHERE user_id = ?",
+    c.execute("UPDATE users SET is_vip = 1, vip_until = ?, likes_left = 99999999 WHERE user_id = ?",
               (until, user_id))
     conn.commit()
     conn.close()
@@ -355,3 +353,11 @@ def get_active_models():
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+def clear_old_likes(days=7):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM likes WHERE created_at < datetime('now', '-{} days')".format(days))
+    conn.commit()
+    conn.close()
