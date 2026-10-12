@@ -456,7 +456,7 @@ async def vip_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ Tu perfil se muestra en *todas las regiones*\n"
         "✅ Apareces primero en las búsquedas\n"
         "✅ Insignia VIP en tu perfil\n\n"
-        "Precio: *100 Stars* / 30 días\n\n"
+        "Precio: *250 Stars* / 30 días\n\n"
         "Pulsa el botón para comprar 👇",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -473,7 +473,7 @@ async def send_vip_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payload="vip_30d",
         provider_token="",
         currency="XTR",
-        prices=[LabeledPrice("VIP 30 días", 100)],
+        prices=[LabeledPrice("VIP 30 días", 250)],
         start_parameter="vip-30d"
     )
 
