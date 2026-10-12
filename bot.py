@@ -447,7 +447,7 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- VIP ----------
 async def vip_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("💎 VIP 30 días (100 ⭐)", callback_data="vip_buy")]
+        [InlineKeyboardButton("💎 VIP 30 días (250 ⭐)", callback_data="vip_buy")]
     ]
     await update.message.reply_text(
         "💎 *CitasMundial VIP*\n\n"
