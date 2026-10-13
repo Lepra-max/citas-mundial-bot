@@ -61,6 +61,29 @@ def init_db():
         user_id INTEGER PRIMARY KEY,
         last_date TEXT
     )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS model_payments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    model_id INTEGER,
+    amount INTEGER,
+    payment_type TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS unlocked_photos (
+    user_id INTEGER,
+    model_id INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, model_id)
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS unlocked_chats (
+    user_id INTEGER,
+    model_id INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, model_id)
+    )""")
     conn.commit()
     conn.close()
 
@@ -361,3 +384,108 @@ def clear_old_likes(days=7):
     c.execute("DELETE FROM likes WHERE created_at < datetime('now', '-{} days')".format(days))
     conn.commit()
     conn.close()
+
+
+def register_payment(user_id, model_id, amount, payment_type):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""INSERT INTO model_payments (user_id, model_id, amount, payment_type)
+                 VALUES (?, ?, ?, ?)""", (user_id, model_id, amount, payment_type))
+    conn.commit()
+    conn.close()
+
+
+def has_unlocked_photo(user_id, model_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM unlocked_photos WHERE user_id = ? AND model_id = ?",
+              (user_id, model_id))
+    result = c.fetchone()
+    conn.close()
+    return result is not None
+
+
+def unlock_photo(user_id, model_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO unlocked_photos (user_id, model_id) VALUES (?, ?)",
+              (user_id, model_id))
+    conn.commit()
+    conn.close()
+
+
+def has_unlocked_chat(user_id, model_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM unlocked_chats WHERE user_id = ? AND model_id = ?",
+              (user_id, model_id))
+    result = c.fetchone()
+    conn.close()
+    return result is not None
+
+
+def unlock_chat(user_id, model_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO unlocked_chats (user_id, model_id) VALUES (?, ?)",
+              (user_id, model_id))
+    conn.commit()
+    conn.close()
+
+
+def get_model_earnings(model_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COALESCE(SUM(amount), 0) FROM model_payments WHERE model_id = ?",
+              (model_id,))
+    total = c.fetchone()[0]
+    conn.close()
+    return total
+
+
+def get_model_stats(model_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM model_payments WHERE model_id = ? AND payment_type = 'photo'",
+              (model_id,))
+    photo_count = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM model_payments WHERE model_id = ? AND payment_type = 'chat'",
+              (model_id,))
+    chat_count = c.fetchone()[0]
+    c.execute("SELECT COALESCE(SUM(amount), 0) FROM model_payments WHERE model_id = ?",
+              (model_id,))
+    total = c.fetchone()[0]
+    conn.close()
+    return {
+        "photos": photo_count,
+        "chats": chat_count,
+        "total": total,
+        "her_cut": total // 2,
+        "your_cut": total - (total // 2)
+    }
+
+
+def get_all_model_payments():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""SELECT u.name, u.user_id,
+                 COALESCE(SUM(p.amount), 0) as total,
+                 COUNT(CASE WHEN p.payment_type = 'photo' THEN 1 END) as photos,
+                 COUNT(CASE WHEN p.payment_type = 'chat' THEN 1 END) as chats
+                 FROM users u
+                 LEFT JOIN model_payments p ON p.model_id = u.user_id
+                 WHERE u.is_model = 1
+                 GROUP BY u.user_id
+                 ORDER BY total DESC""")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+
+def get_model_photo(model_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT model_photo1 FROM users WHERE user_id = ? AND is_model = 1", (model_id,))
+    row = c.fetchone()
+    conn.close()
+    return row[0] if row else None

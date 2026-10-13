@@ -484,6 +484,41 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    payload = update.message.successful_payment.invoice_payload
+    amount = update.message.successful_payment.total_amount
+
+    if payload == "vip_30d":
+        db.set_vip(user_id, 30)
+        msg = "🎉 ¡Ahora eres VIP por 30 días! 💎\n\nDisfruta de likes ilimitados y visibilidad global."
+    elif payload.startswith("unlock_photo_"):
+        model_id = int(payload.split("_")[2])
+        db.unlock_photo(user_id, model_id)
+        db.register_payment(user_id, model_id, 50, "photo")
+        msg = "📸 ¡Foto desbloqueada! Usa /modelos para verla completa."
+    elif payload.startswith("unlock_chat_"):
+        model_id = int(payload.split("_")[2])
+        db.unlock_chat(user_id, model_id)
+        db.register_payment(user_id, model_id, 300, "chat")
+        msg = "💬 ¡Chat desbloqueado! Ya puedes escribirle a la modelo."
+    else:
+        msg = "✅ ¡Pago recibido!"
+
+    await update.message.reply_text(msg)
+
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"💰 *Nuevo pago*\n\n"
+                 f"👤 {update.effective_user.first_name}\n"
+                 f"🆔 `{user_id}`\n"
+                 f"📦 {payload}\n"
+                 f"⭐ {amount} Stars",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+
 # ---------- BOTONES ----------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -511,6 +546,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "vip_buy":
         await send_vip_invoice(update, context)
+        return
+
+    if data.startswith("unlock_photo_"):
+        await unlock_photo_payment(update, context)
+        return
+
+    if data.startswith("unlock_chat_"):
+        await unlock_chat_payment(update, context)
+        return
+
+    if data == "none":
+        await query.answer("Ya tienes todo desbloqueado ✅")
         return
 
     if data.startswith("aprobar_"):
@@ -663,6 +710,209 @@ async def modelo_no(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("❌ Sin problema. Usa /ser_modelo si cambias de opinión.")
 
 
+
+
+async def blur_and_send(update, context, photo_id, caption, keyboard=None):
+    """Descarga la foto, la difumina y la envía."""
+    import io
+    from PIL import Image, ImageFilter
+
+    try:
+        file = await context.bot.get_file(photo_id)
+        file_bytes = await file.download_as_bytearray()
+
+        img = Image.open(io.BytesIO(file_bytes))
+        img = img.filter(ImageFilter.GaussianBlur(radius=25))
+
+        output = io.BytesIO()
+        img.save(output, format='JPEG', quality=85)
+        output.seek(0)
+
+        await update.effective_chat.send_photo(
+            photo=output,
+            caption=caption,
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(f"Error difuminando: {e}")
+        await update.effective_chat.send_message(
+            f"👤 {caption}",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+
+
+async def modelos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Muestra las modelos del mes con fotos difuminadas."""
+    user = db.get_user(update.effective_user.id)
+    if not user:
+        await update.message.reply_text("Primero crea tu perfil con /registro")
+        return
+
+    if user[3] == "Mujer":
+        await update.message.reply_text(
+            "🌹 Esta sección es para los caballeros. \n\n"
+            "Si quieres ser modelo, usa /ser_modelo"
+        )
+        return
+
+    models = db.get_active_models()
+    if not models:
+        await update.message.reply_text(
+            "🌹 Aún no hay modelos disponibles. Vuelve pronto."
+        )
+        return
+
+    await update.message.reply_text(
+        f"🌹 *Modelos del Mes*\n\n"
+        f"Hay *{len(models)}* modelos disponibles.\n"
+        f"Desbloquea sus fotos por *50 Stars* o escríbeles por *300 Stars*.\n\n"
+        f"👇 Aquí tienes la primera:",
+        parse_mode="Markdown"
+    )
+
+    for model_id, name, age, country, photo1 in models:
+        unlocked_photo = db.has_unlocked_photo(update.effective_user.id, model_id)
+        unlocked_chat = db.has_unlocked_chat(update.effective_user.id, model_id)
+
+        keyboard = []
+        if not unlocked_photo:
+            keyboard.append([InlineKeyboardButton("📸 Desbloquear foto (50 ⭐)", callback_data=f"unlock_photo_{model_id}")])
+        if not unlocked_chat:
+            keyboard.append([InlineKeyboardButton("💬 Escribir a la modelo (300 ⭐)", callback_data=f"unlock_chat_{model_id}")])
+        
+        if not keyboard:
+            keyboard.append([InlineKeyboardButton("✅ Todo desbloqueado", callback_data="none")])
+
+        caption = (
+            f"🌹 *{name}*, {age} años\n"
+            f"🌍 {country}\n\n"
+            f"{'📸 Foto desbloqueada ✅' if unlocked_photo else '🔒 Foto bloqueada'}\n"
+            f"{'💬 Chat desbloqueado ✅' if unlocked_chat else '🔒 Chat bloqueado'}"
+        )
+
+        if unlocked_photo and photo1:
+            await update.message.reply_photo(
+                photo=photo1,
+                caption=caption,
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        elif photo1:
+            await blur_and_send(
+                update, context, photo1, caption,
+                InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            await update.message.reply_text(
+                caption,
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+
+async def unlock_photo_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inicia el pago para desbloquear una foto."""
+    query = update.callback_query
+    await query.answer()
+    model_id = int(query.data.split("_")[2])
+
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title="Desbloquear foto de modelo",
+        description="Ver la foto completa de esta modelo",
+        payload=f"unlock_photo_{model_id}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice("Foto de modelo", 50)],
+        start_parameter="unlock-photo"
+    )
+
+
+async def unlock_chat_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inicia el pago para desbloquear el chat con una modelo."""
+    query = update.callback_query
+    await query.answer()
+    model_id = int(query.data.split("_")[2])
+
+    await context.bot.send_invoice(
+        chat_id=update.effective_chat.id,
+        title="Escribir a la modelo",
+        description="Enviar un mensaje privado a esta modelo",
+        payload=f"unlock_chat_{model_id}",
+        provider_token="",
+        currency="XTR",
+        prices=[LabeledPrice("Chat con modelo", 300)],
+        start_parameter="unlock-chat"
+    )
+
+
+async def mi_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Panel para que las modelos vean sus ganancias."""
+    user = db.get_user(update.effective_user.id)
+    if not user:
+        await update.message.reply_text("Primero crea tu perfil con /registro")
+        return
+
+    if user[13] != "approved":
+        await update.message.reply_text(
+            "🌹 Este panel es solo para modelos aprobadas.\n\n"
+            "Si quieres ser modelo, usa /ser_modelo"
+        )
+        return
+
+    stats = db.get_model_stats(user[0])
+    total = stats["total"]
+    her_cut = stats["her_cut"]
+
+    await update.message.reply_text(
+        f"🌹 *Tu Panel de Modelo*\n\n"
+        f"👁️ *Fotos vistas:* {stats['photos']}\n"
+        f"💬 *Chats abiertos:* {stats['chats']}\n\n"
+        f"💰 *Total generado:* {total} Stars\n"
+        f"💵 *Tu 50%:* {her_cut} Stars\n"
+        f"🏦 *Mi 50%:* {stats['your_cut']} Stars\n\n"
+        f"📌 Los pagos se procesan semanalmente.\n"
+        f"Contacta al admin para coordinar.",
+        parse_mode="Markdown"
+    )
+
+
+async def ingresos(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Panel de admin con los ingresos de todas las modelos."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    rows = db.get_all_model_payments()
+    if not rows:
+        await update.message.reply_text("Aún no hay ingresos de modelos.")
+        return
+
+    texto = "💰 *Ingresos de Modelos*\n\n"
+    total_general = 0
+    total_a_pagar = 0
+
+    for name, uid, total, photos, chats in rows:
+        her_cut = total // 2
+        total_general += total
+        total_a_pagar += her_cut
+        texto += (
+            f"🌹 *{name}*\n"
+            f"   📸 {photos} fotos | 💬 {chats} chats\n"
+            f"   💰 {total} Stars (ella: {her_cut})\n\n"
+        )
+
+    texto += (
+        f"━━━━━━━━━━━━━━━\n"
+        f"📊 *Total general:* {total_general} Stars\n"
+        f"💵 *A pagar a modelos:* {total_a_pagar} Stars\n"
+        f"🏦 *Tu ganancia:* {total_general - total_a_pagar} Stars"
+    )
+
+    await update.message.reply_text(texto, parse_mode="Markdown")
+
+
 def main():
     db.init_db()
     print("🤖 Iniciando CitasMundialBot...")
@@ -720,6 +970,9 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("ser_modelo", ser_modelo))
     app.add_handler(CommandHandler("modelos_pendientes", modelos_pendientes))
+    app.add_handler(CommandHandler("modelos", modelos))
+    app.add_handler(CommandHandler("mi_panel", mi_panel))
+    app.add_handler(CommandHandler("ingresos", ingresos))
 
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
@@ -808,3 +1061,5 @@ async def modelos_pendientes(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 if __name__ == "__main__":
     main()
+
+
