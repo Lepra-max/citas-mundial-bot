@@ -15,7 +15,10 @@ import db
 warnings.filterwarnings("ignore", category=UserWarning)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+
+
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
+
 
 (
     REG_NAME, REG_AGE, REG_GENDER, REG_LOOKING, REG_COUNTRY, REG_BIO, REG_PHOTO,
@@ -24,6 +27,7 @@ ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
     MODEL_PHOTO1, MODEL_PHOTO2
 ) = range(12)
 
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -219,6 +223,22 @@ async def reg_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     photo_id = update.message.photo[-1].file_id
     user_id = update.effective_user.id
+
+    db.add_media(user_id, photo_id, "photo", count + 1)
+    context.user_data["photo_count"] = count + 1
+
+    if count + 1 < 3:
+        await update.message.reply_text(
+            f"✅ Foto {count + 1}/3 guardada.\n\n"
+            "Envía otra foto o /listo para terminar."
+        )
+    else:
+        await update.message.reply_text(
+            "✅ 3 fotos guardadas. Envía /listo para terminar."
+        )
+    return REG_PHOTO
+
+
 async def finalize_register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     referred_by = context.user_data.get("referred_by")
@@ -260,10 +280,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- PERFIL ----------
 async def perfil(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = db.get_user(update.effective_user.id)
+    user_id = update.effective_user.id
+    user = db.get_user(user_id)
     if not user or not user[2]:
         await update.message.reply_text("Aún no tienes perfil. Usa /registro")
         return
+
+    # Dar VIP automático al admin
+    if user_id == ADMIN_ID and not db.check_vip_expired(user_id):
+        db.set_vip(user_id, 3650)
+        user = db.get_user(user_id)
 
     is_vip = db.check_vip_expired(user[0])
     vip_tag = "💎 VIP" if is_vip else "🆓 Gratis"
@@ -548,6 +574,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_vip_invoice(update, context)
         return
 
+    if data == "admin_ingresos":
+        if user_id != ADMIN_ID:
+            return
+        await ingresos(update, context)
+        return
+
+    if data == "admin_reportes":
+        if user_id != ADMIN_ID:
+            return
+        await admin_reportes(update, context)
+        return
+
+    if data == "admin_broadcast":
+        if user_id != ADMIN_ID:
+            return
+        await admin_broadcast(update, context)
+        return
+
+    if data == "admin_refresh":
+        if user_id != ADMIN_ID:
+            return
+        await query.edit_message_text("🔄 Actualiza con /admin")
+        return
+
+    if data == "admin_back":
+        await query.edit_message_text("Usa /admin para volver al panel")
+        return
+
     if data.startswith("unlock_photo_"):
         await unlock_photo_payment(update, context)
         return
@@ -671,6 +725,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- MANEJADOR DE TEXTO ----------
 async def text_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
+    if context.user_data.get("admin_broadcast"):
+        if user_id != ADMIN_ID:
+            return
+        context.user_data["admin_broadcast"] = False
+        text = update.message.text.strip()
+
+        if text == "/cancelar":
+            await update.message.reply_text("❌ Broadcast cancelado.")
+            return
+
+        import sqlite3
+        conn = sqlite3.connect("citas.db")
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE banned = 0")
+        users = c.fetchall()
+        conn.close()
+
+        enviados = 0
+        for (uid,) in users:
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"📢 *Aviso:*\n\n{text}", parse_mode="Markdown")
+                enviados += 1
+            except Exception:
+                pass
+
+        await update.message.reply_text(f"✅ Mensaje enviado a {enviados} usuarios.")
+        return
 # ---------- MAIN ----------
 
 async def modelo_si(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -913,6 +995,129 @@ async def ingresos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto, parse_mode="Markdown")
 
 
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Panel de administración completo."""
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    import sqlite3
+    conn = sqlite3.connect("citas.db")
+    c = conn.cursor()
+
+    c.execute("SELECT COUNT(*) FROM users WHERE banned = 0")
+    total = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) = DATE('now')")
+    hoy = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM users WHERE DATE(created_at) = DATE('now', '-1 day')")
+    ayer = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM users WHERE is_model = 1")
+    modelos = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM users WHERE is_vip = 1")
+    vips = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM matches")
+    matches = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM messages")
+    mensajes = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM reports")
+    reportes = c.fetchone()[0]
+
+    c.execute("SELECT COALESCE(SUM(amount), 0) FROM model_payments")
+    ingresos = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM users WHERE banned = 1")
+    baneados = c.fetchone()[0]
+
+    conn.close()
+
+    crecimiento = f"+{hoy - ayer}" if hoy >= ayer else f"{hoy - ayer}"
+
+    texto = (
+        f"👑 *PANEL DE ADMIN*\n"
+        f"━━━━━━━━━━━━━━━\n\n"
+        f"📊 *Estadísticas de usuarios*\n"
+        f"👥 Total: *{total}*\n"
+        f"🆕 Hoy: *{hoy}*\n"
+        f"📅 Ayer: *{ayer}*\n"
+        f"📈 Crecimiento: *{crecimiento}*\n\n"
+        f"💎 VIPs: *{vips}*\n"
+        f"🌹 Modelos: *{modelos}*\n"
+        f"🚫 Baneados: *{baneados}*\n\n"
+        f"💘 Matches: *{matches}*\n"
+        f"💬 Mensajes: *{mensajes}*\n"
+        f"🚨 Reportes: *{reportes}*\n\n"
+        f"💰 *Ingresos totales:* *{ingresos} Stars*\n"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("💰 Ver ingresos por modelo", callback_data="admin_ingresos")],
+        [InlineKeyboardButton("🚨 Ver reportes", callback_data="admin_reportes")],
+        [InlineKeyboardButton("📢 Enviar mensaje masivo", callback_data="admin_broadcast")],
+        [InlineKeyboardButton("🔄 Actualizar", callback_data="admin_refresh")]
+    ]
+
+    await update.message.reply_text(
+        texto,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prepara el envío de un mensaje masivo."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "📢 *Enviar mensaje masivo*\n\n"
+        "Envía el mensaje que quieres mandar a TODOS los usuarios.\n"
+        "Escribe /cancelar para cancelar.",
+        parse_mode="Markdown"
+    )
+    context.user_data["admin_broadcast"] = True
+
+
+async def admin_reportes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Muestra los reportes pendientes."""
+    query = update.callback_query
+    await query.answer()
+
+    import sqlite3
+    conn = sqlite3.connect("citas.db")
+    c = conn.cursor()
+    c.execute("""SELECT r.reporter_id, r.reported_id, r.reason, r.created_at,
+                 u.name FROM reports r
+                 LEFT JOIN users u ON u.user_id = r.reported_id
+                 ORDER BY r.created_at DESC LIMIT 10""")
+    rows = c.fetchall()
+    conn.close()
+
+    if not rows:
+        await query.edit_message_text("✅ No hay reportes pendientes.")
+        return
+
+    texto = "🚨 *Últimos reportes:*\n\n"
+    for rep_id, reported_id, reason, date, name in rows:
+        texto += (
+            f"👤 Reportado: *{name or reported_id}*\n"
+            f"🆔 `{reported_id}`\n"
+            f"📝 Razón: {reason}\n"
+            f"🕐 {date}\n\n"
+        )
+
+    keyboard = [[InlineKeyboardButton("⬅️ Volver", callback_data="admin_back")]]
+    await query.edit_message_text(
+        texto,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
 def main():
     db.init_db()
     print("🤖 Iniciando CitasMundialBot...")
@@ -968,6 +1173,7 @@ def main():
     app.add_handler(CommandHandler("reportar", reportar))
     app.add_handler(CommandHandler("vip", vip_info))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("ser_modelo", ser_modelo))
     app.add_handler(CommandHandler("modelos_pendientes", modelos_pendientes))
     app.add_handler(CommandHandler("modelos", modelos))
